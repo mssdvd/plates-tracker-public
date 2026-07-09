@@ -1,0 +1,29 @@
+# plates-tracker: Go backend + built webapp in one image (the single-binary deploy, containered).
+# Build from the repo root:  podman build -f deploy/Containerfile -t localhost/plates-tracker .
+
+FROM docker.io/library/node:22-alpine AS webapp
+WORKDIR /src
+COPY webapp/package.json webapp/package-lock.json ./
+RUN npm ci
+COPY webapp/ ./
+RUN npm run build
+
+FROM docker.io/library/golang:1.26-alpine AS server
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ ./
+# modernc.org/sqlite is pure Go — CGO off gives a static binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /plates-server .
+
+FROM docker.io/library/alpine:3.22
+RUN adduser -D -H app && mkdir /data && chown app /data
+COPY --from=server /plates-server /usr/local/bin/plates-server
+COPY --from=webapp /src/dist /srv/webapp
+USER app
+# API_TOKEN must be provided at run time; PORT defaults to 8000 in the binary.
+ENV DB_PATH=/data/plates.db \
+    WEB_DIR=/srv/webapp
+VOLUME /data
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/plates-server"]

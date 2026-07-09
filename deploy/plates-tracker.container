@@ -1,0 +1,24 @@
+# Podman Quadlet unit — the podman-native way to run this as a (rootless) systemd service.
+#
+# Install:
+#   podman build -f deploy/Containerfile -t localhost/plates-tracker .
+#   mkdir -p ~/.config/plates-tracker && echo 'API_TOKEN=change-me' > ~/.config/plates-tracker/env
+#   cp deploy/plates-tracker.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload && systemctl --user start plates-tracker
+#   loginctl enable-linger "$USER"   # keep it running after logout
+
+[Unit]
+Description=plates-tracker backend + webapp
+
+[Container]
+Image=localhost/plates-tracker:latest
+PublishPort=8000:8000
+Volume=plates-data:/data
+EnvironmentFile=%h/.config/plates-tracker/env
+AutoUpdate=local
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

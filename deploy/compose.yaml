@@ -1,0 +1,19 @@
+# Run with podman-compose (or docker compose) from this directory:
+#   echo 'API_TOKEN=change-me' > .env
+#   podman-compose up -d --build
+services:
+  plates-tracker:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    image: localhost/plates-tracker:latest
+    ports:
+      - "8000:8000"
+    environment:
+      API_TOKEN: ${API_TOKEN:?set API_TOKEN in deploy/.env}
+    volumes:
+      - plates-data:/data
+    restart: unless-stopped
+
+volumes:
+  plates-data:

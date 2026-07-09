@@ -1,0 +1,19 @@
+# Model build pipeline (workstation only — NOT installed on the phone).
+#
+# IMPORTANT: these wheels do NOT support Python 3.14. Provision Python 3.11 with uv:
+#   uv venv --python 3.11 .venv   (see README.md for the full, verified recipe)
+#
+
+# Workstation runtime for spike tests / reference scripts
+onnxruntime==1.18.*
+
+# fast-alpr open-source ALPR models (detector + OCR), MIT-licensed
+# 0.4.* is the first line with the cct-*-global-model OCR hub entries (the european/global
+# mobile-vit models are now legacy — see docs/model-specs.md).
+fast-alpr==0.4.*
+
+# utilities
+numpy<2.0
+pillow
+huggingface-hub
+matplotlib

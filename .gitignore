@@ -1,0 +1,59 @@
+
+# ─── Python (models/ + server/) ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.python-version
+
+# Model build intermediates (keep these local; compiled outputs go in models/compiled/)
+models/work/
+models/*.onnx
+models/*_saved_model/
+*.h5
+
+# Driving footage + annotated outputs — LARGE and contain real plates (personal data). Never commit.
+footage/
+models/footage/
+*.mp4
+*.mov
+*.mkv
+*.avi
+
+# Device DB/log dumps — contain real plates (personal data). Kept as dated folders, not versioned in git.
+device-dumps/
+
+# ─── Android ─────────────────────────────────────────────────────────────────
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# ─── Webapp (Node) ───────────────────────────────────────────────────────────
+webapp/node_modules/
+webapp/dist/
+webapp/.vite/
+
+# ─── Secrets / config ────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+
+# ─── Server runtime DB ───────────────────────────────────────────────────────
+*.db
+*.db-journal
+*.sqlite3
+
+# ─── OS / editor ─────────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+.vscode/

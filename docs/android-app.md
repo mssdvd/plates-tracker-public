@@ -1,0 +1,188 @@
+# Building the capture app (Phase 0 → Phase 1b)
+
+How the capture app gets built. This expands the top-level plan's Phase 0/1b; it does not restate
+it. Read [`spike.md`](spike.md) (feasibility) and [`model-specs.md`](model-specs.md) (model I/O)
+first — they hold the rationale this plan assumes.
+
+The build is **gated**, not linear. Two cheap tests must pass before the expensive app work, and
+each can send us back to fix capture/models instead of writing more Kotlin.
+
+---
+
+## Gate A — reads work on real footage (workstation, no phone) ⬅️ do first
+
+**Question:** does fast-alpr read *Italian plates from a moving car*? This is the make-or-break
+constraint and the cheapest possible test — it needs no app.
+
+- **Blocked on the user:** record 1–2 min of windshield video on a real drive (city + a faster
+  road, ideally a dusk clip too). Nothing downstream proceeds without this footage.
+- Run the already-verified harness:
+  ```bash
+  cd models
+  .venv-convert/bin/python spike_video_test.py --video drive.mp4 --fps 8 --annotated out.mp4
+  ```
+- **Pass:** real plates show up as ✓ valid reads at the speeds driven, per-frame latency is sane.
+- **Fail:** fix *capture* before any phone work — faster shutter, better mount, or bump detector
+  input 384→512/608 (`model-specs.md`). Do not build the app to work around unreadable frames.
+
+## Gate B — reads work on-device (throwaway spike app)
+
+A deliberately minimal Kotlin app: CameraX preview → throttled `ImageAnalysis` → ORT detector +
+OCR → overlay the read text on screen. **No DB, no upload, no service.** Just proves the pipeline
+runs on the phone and measures per-frame latency at the throttle rate.
+
+- Runtime: **`onnxruntime-android`** feeding the `.onnx` models directly (see `spike.md` for why
+  ORT over TFLite for the spike).
+- ⚠️ **ORT runs on CPU (XNNPACK).** NNAPI is deprecated (Android 15), so there is no NPU acceleration on this path. If CPU latency at 5–10 fps is acceptable, this is sufficient.
+- **Pass:** stable reads + a per-frame budget that fits the chosen throttle without thermal
+  throttling over a ~20 min drive.
+
+Both gates green → build the real app.
+
+---
+
+## Phase 1b — the capture app
+
+Stack: **Kotlin + CameraX + ONNX Runtime + Room + WorkManager + FusedLocationProvider.** Native
+Kotlin (a real-time camera+ML loop fights cross-platform frameworks).
+
+### The wire contract is already fixed — mirror it, don't invent it
+
+The upload payload is **exactly** the `sighting` struct in `server/cmd/seed/main.go` (the seeder is
+the reference producer). The Kotlin data class mirrors it field-for-field; the app is "integrated"
+when its records are indistinguishable from the seeder's. Posts go to `POST /records` (batch,
+bearer token). Fields:
+
+| json | source on device | notes |
+|---|---|---|
+| `id` | client-generated UUID, **stable per logical sighting** | backend dedups on this — see idempotency below |
+| `plate_text` | OCR | raw model output, verbatim |
+| `read_kind` | constant | `"exact"` (2026-07-09: no more corrected/generic/invalid variants — see below) |
+| `confidence` | OCR | 0–1 |
+| `captured_at` | clock at capture | RFC3339 |
+| `lat` / `lon` | FusedLocation | |
+| `speed_kmh` | FusedLocation | |
+| `accuracy_m` | FusedLocation | |
+| `country` | OCR model's region head | ISO-2 (argmax over `cct-s-v2-global`'s 66-class country head — see `docs/model-specs.md`); `"?"` when it says "Unknown" |
+| `source_device` | constant | e.g. device model / `"android-phone"` |
+
+**2026-07-09: format-regex validation is no longer a gate anywhere in this pipeline** (`PlateValidator`/
+`shared/plate_validation.py` are unused in production now, kept only for `estimateRegistrationYear`
+and as reference — see their class docs and `docs/model-specs.md`). `plate_text`/`country` come
+straight from the OCR model; there is no more `plate_type`, and no more exact/corrected/generic/
+invalid distinction. See component 5 below for what replaced the old confidence-floor-only gate.
+
+### Components
+
+1. **Project scaffold** — Gradle, target SDK matching the phone (Android 14+). Deps: CameraX,
+   `onnxruntime-android`, Room, WorkManager, `play-services-location`. Bundle the two `.onnx`
+   models as assets; alphabet/slot-count mirror `cct_s_v2_global_plate_config.yaml` as Kotlin
+   constants (`OcrDecoder`) rather than parsing the yaml on-device.
+2. **Capture** — CameraX `ImageAnalysis`, **throttle to 5–10 fps** (not the full 30). Throttle is
+   a first-class thermal/battery budget the spike measured, not an afterthought.
+3. **Inference.** The *bulk of the work here is
+   porting fast-alpr's Python pre/post-processing to Kotlin*: normalize → crop each detection →
+   BGR2RGB → resize to 128×64 → run OCR → decode `[1,10,37]` as 10 slots × 37 classes (argmax per
+   slot, alphabet/length from the yaml). None of this is free on Android.
+4. **Validation** — `shared/plate_validation.py`/`PlateValidator.kt` port fast-alpr-style format
+   matching + bounded confusion-correction. **2026-07-09: no longer used as a gate in production**
+   (see the wire-contract note above) — kept for `estimateRegistrationYear` (still runs
+   opportunistically against whatever OCR text happens to match a known format) and as a reference
+   implementation, not deleted.
+5. **Dedup / multi-frame voting** — collapse the same physical plate across frames to **one
+   record**. Gate A proved this is a **first-class component, not a footnote**: a single lead car
+   produced ~6 slightly different variants of its own plate from per-frame OCR slips (edit distance
+   1–2 from the canonical read), so **exact-string dedup would log one car as many**. Required:
+   - **Fuzzy clustering** — group reads within a short time window AND small edit distance into one
+     candidate; keep the highest-confidence reading as the canonical text.
+   - **Persistence + confidence gate** — three paths promote a cluster: **steady** (≥3 frames,
+     conf ≥0.70), **fast** (≥2 frames, conf ≥0.75, added 2026-07-04 for oncoming traffic), and
+     **instant** (≥1 frame, conf ≥0.90, added 2026-07-09: the 2026-07-09 drive's field data showed
+     83% of real clusters are single-frame, which the first two paths can never promote no matter
+     how confident that one read was). Accepted tradeoff on the instant path: OCR confidence no
+     longer reliably separates a genuine read from confident garble on this model (re-verified
+     numbers in `docs/model-specs.md`) — 0.90 bounds, not eliminates, that risk.
+   - **2026-07-09 afternoon field results (first real drive on this config — ground truth
+     all-Italian traffic, 297 promotions, full analysis in
+     `device-dumps/2026-07-09_184031/REPORT.md`): ~27% junk, three concrete dedup failure modes.**
+     (1) *Fragment siblings*: a truncated 3-char read is more than `maxEditDistance`=2 edits from
+     its full 7-char plate because Levenshtein counts the length gap, so it seeds its own
+     cluster and instant-promotes seconds before/after the real one — same car, two records, and
+     the region head labels the fragment a foreign country. (2) *Window-expiry re-promotion*: a
+     car followed in traffic re-promotes with a fresh `id` every time reads gap >`windowMs` (10 s)
+     — one plate became 5 records in 2 minutes; the stable-`id` idempotency only guards upload
+     retries, not this. (3) *Cluster text drift*: a fragment-seeded sibling cluster can absorb
+     later reads until its `best` is within 2 edits of the full text, then promote the identical
+     string a second time inside the window (observed 1.0 s apart) — `clusters.firstOrNull`
+     matching on the *mutating* `best.text` makes this order-dependent. Empty OCR reads (all-pad
+     output, conf ≈1.0 — see `docs/model-specs.md`) also sail through instant: 44 rows. Cheapest
+     fixes per that data: min-length ≥7 before `observe()` (kills 74/80 junk rows), and/or
+     `PlateValidator` exact match required on the instant path only (kills all 80).
+6. **Location** — `FusedLocationProviderClient` supplies lat/lon/speed/accuracy; attach at capture.
+7. **Storage** — plain SQLite (`SightingStore`), not Room. Rows carry a `synced` flag.
+   2026-07-09: the `unconfirmed_reads` twin table (2026-07-06 — logged reads that passed
+   plate-format validation but never cleared step 5's gate) is retired along with the format-regex
+   gate itself; see `docs/model-specs.md`.
+8. **Sync** — WorkManager job drains the sightings queue (`POST /records`),
+   marks rows synced, retries
+   with backoff. Default constraints: Wi-Fi + charging (configurable).
+9. **UI** — glanceable and hands-free. Mount-and-drive: one-tap start, live today's-count, current
+   detections, sync status. No interaction required while moving (you can't tap a shutter at speed).
+
+### Buffered capture v2 — RAM ring + burst re-scan (added 2026-07-08, undocumented until now)
+
+Component 2's single live pass has a hard limit: a fast-closing oncoming plate can cross from "too
+small to OCR" to "out of range" in well under the live scan's compute budget. Capture v2
+(`CaptureService.kt`, `FrameRingEncoder.kt`/`AuRing.kt`, `BurstPlanner.kt`/`BurstProcessor.kt`,
+gated by the `capture_v2` setting) works around this: every other delivered camera frame (~15fps of
+the native ~30fps feed — `BurstProcessor` only ever consumes footage at that rate anyway, so
+encoding faster than that is pure waste) is fed to a hardware HEVC encoder into an in-RAM ring
+buffer (`AuRing`, ~6-7s of 4K, sized by bitrate not frame count). When the live pass finds a box too
+small to OCR confidently (`onFarHit`), the surrounding ~1.5s of ring footage is handed to a
+lower-priority "burst" thread for a slower, higher-effort re-scan, and any resulting read still
+flows through the normal `DedupEngine`/promotion path.
+
+**This only rescues a box the live pass already found** — it does nothing for a plate the detector
+never boxed at all (below `BoxMapper.CONF` or too small at the detector's 384px input); that's a
+separate, so-far-unaddressed gap.
+
+**Known fragility, both fixed 2026-07-08:**
+- The whole ring/burst path silently falls back to a plain live-only scan (`analyzeV1`, no burst,
+  ever, for the rest of that session) if a single delivered frame reports `rotationDegrees != 0`
+  (`CaptureService.kt`'s `analyze()`). `ImageAnalysis`'s target rotation is now pinned explicitly at
+  bind time via `DisplayManager` (`startCamera()`/`targetRotation()`) instead of left to CameraX's
+  implicit inference for a windowless `Service`, which is what made it non-deterministic.
+- Ring encoding and the burst trigger both suspend at `THERMAL_STATUS_SEVERE` — which a
+  dashboard-mounted phone in direct sun can reach. There's no visibility after a drive into whether
+  this happened, or into which path (v1 vs v2) actually ran, without a live logcat session (its ring
+  buffer is small and rotates within minutes). Per-session diagnostics now persist via
+  `AppSettings.saveCaptureStats`/`readCaptureStats` (same pattern as `last_sync_status`) and render
+  in the HUD: frames on v1 vs v2, far-hit/burst-promotion counts, and thermal-bucket dwell time —
+  see `CaptureService.buildCaptureStats()`.
+  2026-07-09 field dump: both fragilities confirmed in the wild — VIRTUAL-SKIN hit SEVERE
+  (45.0 °C) near session end with burst promotions thinning accordingly, **and the persisted stats
+  are now the *only* post-drive signal**: the installed build emits no `Log` lines at all (the
+  `record()` `Log.i` is provably absent from a window the main buffer retained), and main-buffer
+  retention measured ~10 minutes at pull time. Burst-path read quality itself was fine — 18% junk
+  vs live's 26% (`device-dumps/2026-07-09_184031/REPORT.md`).
+
+### Runtime gotchas to settle during scaffolding (don't guess from memory)
+
+- **Foreground service, screen-off while driving.** Android 14 requires a declared
+  `foregroundServiceType` for camera + location plus the matching runtime-permission flow.
+  **Verify the exact FGS type strings and permission requirements at the target API level** when
+  scaffolding — don't hardcode from memory.
+- **Idempotency.** WorkManager *will* retry; the backend keys on `id`. The dedup step must mint a
+  **stable** `id` per logical sighting so a retry is a server-side no-op (proven by the backend's
+  `TestUploadAndIdempotency`). Don't generate a fresh UUID at upload time.
+- **Thermal/battery** over a real ~20 min+ drive — the spike's job is to find the throttle rate
+  that survives this, and the app inherits that number.
+- **Country.** `IT` is derivable from the validator; foreign-plate *format* detection is hard and
+  deferred — non-IT reads default to `"?"` (which the backend/stats already bucket as unknown).
+
+## Sequence summary
+
+1. **Gate A** — user records a drive; run `spike_video_test.py`; judge real-plate reads. *(blocks on footage)*
+2. **Gate B** — throwaway ORT spike app on the phone; measure CPU latency + thermal at throttle.
+3. **Phase 1b** — build components 1–9; integrate against the live Go backend; confirm uploaded
+   records match the seeder's shape and dedup on retry.
