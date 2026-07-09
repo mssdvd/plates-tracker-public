@@ -20,6 +20,15 @@ import kotlin.math.roundToInt
  * promotion outcomes on the current (much more accurate) OCR model. Kept in the code (not
  * deleted) since the sample was only 3 clips; pass `enableCorrection = true` to re-enable while
  * investigating further. See docs/model-specs.md.
+ *
+ * 2026-07-10: back on the hot path, narrowly. [validate] is no longer only a reference /
+ * [estimateRegistrationYear] helper — `DedupEngine`'s 1-frame `instant` promotion path now
+ * requires `validate(text).confidence == Confidence.EXACT` before it will fire (see its class
+ * doc). The 2026-07-09 field drive showed confidence alone can't carry a 1-frame decision (empty
+ * reads at confidence ~=1.0, plate fragments read as confident short strings); structure is the
+ * cheap corroborating signal a single frame doesn't otherwise have. The `steady`/`fast` paths
+ * (>=2-3 corroborating frames) still don't call this — see docs/model-specs.md and
+ * device-dumps/2026-07-09_184031/REPORT.md.
  */
 object PlateValidator {
 

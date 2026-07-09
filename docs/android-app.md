@@ -63,14 +63,16 @@ bearer token). Fields:
 | `lat` / `lon` | FusedLocation | |
 | `speed_kmh` | FusedLocation | |
 | `accuracy_m` | FusedLocation | |
-| `country` | OCR model's region head | ISO-2 (argmax over `cct-s-v2-global`'s 66-class country head — see `docs/model-specs.md`); `"?"` when it says "Unknown" |
+| `country` | OCR model's region head | ISO-2 (argmax over `cct-s-v2-global`'s 66-class country head — see `docs/model-specs.md`); `"?"` when it says "Unknown", or when the decoded plate text is under 7 chars (2026-07-10, see component 5) |
 | `source_device` | constant | e.g. device model / `"android-phone"` |
 
-**2026-07-09: format-regex validation is no longer a gate anywhere in this pipeline** (`PlateValidator`/
-`shared/plate_validation.py` are unused in production now, kept only for `estimateRegistrationYear`
-and as reference — see their class docs and `docs/model-specs.md`). `plate_text`/`country` come
-straight from the OCR model; there is no more `plate_type`, and no more exact/corrected/generic/
-invalid distinction. See component 5 below for what replaced the old confidence-floor-only gate.
+**2026-07-09: format-regex validation is not a gate on OCR output itself** — `plate_text`/`country`
+still come straight from the OCR model, there is no more `plate_type`, and no more corrected/
+generic/invalid read variant (`read_kind` is always `"exact"`). **2026-07-10 update:**
+`PlateValidator`/`shared/plate_validation.py` are back on the promotion path, narrowly:
+`DedupEngine`'s 1-frame `instant` path now requires a structurally exact match before it will fire
+(see component 5) — the `steady`/`fast` paths (>=2-3 frames) still don't gate on it. See the class
+docs and `docs/model-specs.md`.
 
 ### Components
 
@@ -85,10 +87,10 @@ invalid distinction. See component 5 below for what replaced the old confidence-
    BGR2RGB → resize to 128×64 → run OCR → decode `[1,10,37]` as 10 slots × 37 classes (argmax per
    slot, alphabet/length from the yaml). None of this is free on Android.
 4. **Validation** — `shared/plate_validation.py`/`PlateValidator.kt` port fast-alpr-style format
-   matching + bounded confusion-correction. **2026-07-09: no longer used as a gate in production**
-   (see the wire-contract note above) — kept for `estimateRegistrationYear` (still runs
-   opportunistically against whatever OCR text happens to match a known format) and as a reference
-   implementation, not deleted.
+   matching + bounded confusion-correction. **2026-07-09: not a gate on OCR output itself** (see the
+   wire-contract note above) — but **2026-07-10: back on the promotion path**, narrowly, as
+   component 5's `instant`-path structure gate. Otherwise still used for `estimateRegistrationYear`
+   (opportunistically against whatever OCR text happens to match a known format) and as reference.
 5. **Dedup / multi-frame voting** — collapse the same physical plate across frames to **one
    record**. Gate A proved this is a **first-class component, not a footnote**: a single lead car
    produced ~6 slightly different variants of its own plate from per-frame OCR slips (edit distance
@@ -115,9 +117,34 @@ invalid distinction. See component 5 below for what replaced the old confidence-
      later reads until its `best` is within 2 edits of the full text, then promote the identical
      string a second time inside the window (observed 1.0 s apart) — `clusters.firstOrNull`
      matching on the *mutating* `best.text` makes this order-dependent. Empty OCR reads (all-pad
-     output, conf ≈1.0 — see `docs/model-specs.md`) also sail through instant: 44 rows. Cheapest
-     fixes per that data: min-length ≥7 before `observe()` (kills 74/80 junk rows), and/or
-     `PlateValidator` exact match required on the instant path only (kills all 80).
+     output, conf ≈1.0 — see `docs/model-specs.md`) also sail through instant: 44 rows.
+   - **2026-07-10: implemented, and re-measured against the same dataset (plate strings withheld —
+     see the repo's redaction policy).** Re-classifying the 297 rows with the full validator (not
+     the field report's simpler regex) puts real junk at 85/297 (5 more than the report's manual 80
+     — IT-shaped 7-char fragments whose series isn't plausible yet, which the report's format-only
+     check missed but `PlateValidator`'s issue-date prior correctly rejects). Fixes, all in
+     `DedupEngine`/`OcrDecoder`/`Ocr` unless noted:
+     - **Min-length gate (`minReadLength` = 7)** at the top of `observe()`, before a read can seed or
+       join a cluster — covers both call sites (live + burst) from one place. Alone: 75/85 junk
+       rows removed, 0 clean rows affected.
+     - **Structure gate on the `instant` path only**: an extra `PlateValidator.validate(text)
+       .confidence == EXACT` check before a 1-frame promotion fires (`steady`/`fast` unchanged —
+       see the class docs). Alone: 82/85 removed, 0 clean rows affected.
+     - **Both together: 83/85 removed.** The 2 residual rows are genuine 7-char Italian-format
+       reads the region head mislabeled as foreign — a known limit of trusting the region head at
+       exactly the 7-char boundary (see the next bullet), not a promotion-count failure: they're
+       real, once-only sightings, just with the wrong `country`.
+     - **Region head distrusted below 7 chars** (`OcrDecoder.decodeRegion(text, flat)`): a fragment
+       no longer argmaxes to a confident wrong country, which also silences the false foreign-plate
+       tone.
+     - **Dedup hardening**: a read within edit distance *or* a fragment match (substring of an
+       existing cluster's best text, allowing <=1 char slip) now merges via best-match (lowest edit
+       distance, ties on most recent) instead of first-match, and a *structurally valid* reading
+       always outranks a fragment/garble as the cluster's canonical text. A promoted cluster's
+       expiry is extended to 60 s (`promotedWindowMs`) so a followed car's >10 s read gaps in
+       traffic no longer mint a fresh `id` each time.
+     - **Not changed**: the `Log`-stripping theory in the buffered-capture-v2 section below turned
+       out to be wrong — see that section's 2026-07-10 update.
 6. **Location** — `FusedLocationProviderClient` supplies lat/lon/speed/accuracy; attach at capture.
 7. **Storage** — plain SQLite (`SightingStore`), not Room. Rows carry a `synced` flag.
    2026-07-09: the `unconfirmed_reads` twin table (2026-07-06 — logged reads that passed
@@ -160,11 +187,23 @@ separate, so-far-unaddressed gap.
   in the HUD: frames on v1 vs v2, far-hit/burst-promotion counts, and thermal-bucket dwell time —
   see `CaptureService.buildCaptureStats()`.
   2026-07-09 field dump: both fragilities confirmed in the wild — VIRTUAL-SKIN hit SEVERE
-  (45.0 °C) near session end with burst promotions thinning accordingly, **and the persisted stats
-  are now the *only* post-drive signal**: the installed build emits no `Log` lines at all (the
-  `record()` `Log.i` is provably absent from a window the main buffer retained), and main-buffer
-  retention measured ~10 minutes at pull time. Burst-path read quality itself was fine — 18% junk
-  vs live's 26% (`device-dumps/2026-07-09_184031/REPORT.md`).
+  (45.0 °C) near session end with burst promotions thinning accordingly. The dump's own `Log`
+  lines were entirely absent, which the report's diagnostics-gaps section attributed to the
+  installed build stripping `Log` calls; main-buffer retention measured ~10 minutes at pull time
+  either way. Burst-path read quality itself was fine — 18% junk vs live's 26%
+  (`device-dumps/2026-07-09_184031/REPORT.md`).
+  **2026-07-10: that theory doesn't hold — checked, not fixed.** `app/build.gradle.kts`'s `release`
+  buildType has `isMinifyEnabled = false` and there's no `proguard-rules.pro` in the repo to strip
+  anything either way; the field device's installed package is confirmed `DEBUGGABLE` (`dumpsys
+  package`), and rebuilding + installing the current debug APK and running a capture session on
+  the device produces normal `CaptureService` `Log.i` lines in `adb logcat` immediately (including
+  one that live-reproduced the empty-read bug: `recorded  (exact, 2 frames)`). The build was never
+  stripping logs. The far more likely explanation is what the report already measured: ~10 minutes
+  of main-buffer retention against a 2.4-hour drive, so anything from mid-session is long gone by
+  pull time. The persisted capture-stats summary (`AppSettings.saveCaptureStats`) remains the only
+  signal that reliably survives a full drive; a promotion-level journal (report recommendation 5's
+  alternative) would go further but hasn't been built — flagged, not implemented, since the
+  original premise motivating it was wrong.
 
 ### Runtime gotchas to settle during scaffolding (don't guess from memory)
 

@@ -64,6 +64,15 @@ object OcrDecoder {
         return REGION_TO_ISO2[REGIONS[bestIdx]] ?: "?"
     }
 
+    // 2026-07-09 field data: a truncated crop's plate text still argmaxes the region head to a
+    // confident (wrong) country — 29/32 foreign-labeled false positives were <7 chars, the IT car
+    // and moto minimum. Below this length the region head isn't trusted at all.
+    const val MIN_TRUSTED_REGION_LENGTH = 7
+
+    /** [decodeRegion], distrusted below [MIN_TRUSTED_REGION_LENGTH] chars of decoded [text]. */
+    fun decodeRegion(text: String, flat: FloatArray): String =
+        if (text.length >= MIN_TRUSTED_REGION_LENGTH) decodeRegion(flat) else "?"
+
     /**
      * Decoded OCR output. [charConfidences] is the per-slot max softmax aligned char-for-char with
      * [text] (same length). [confidence] is their mean (the whole-read score). [country] is the

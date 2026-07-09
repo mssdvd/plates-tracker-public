@@ -56,6 +56,18 @@ class OcrDecoderTest {
     }
 
     @Test
+    fun decodeRegionDistrustsShortText() {
+        // Same region vector that decodes to "IT" via the raw argmax — but a <7-char plate text
+        // (a fragment/crop, per the 2026-07-09 field data) must not be trusted with any country.
+        val lines = javaClass.getResourceAsStream("/region_vector.txt")!!
+            .bufferedReader().readLines()
+        val vec = lines[1].trim().split(" ").map { it.toFloat() }.toFloatArray()
+
+        assertEquals("?", OcrDecoder.decodeRegion("GE489", vec)) // 5 chars: below the gate
+        assertEquals("IT", OcrDecoder.decodeRegion("GE489CZ", vec)) // 7 chars: at the gate, trusted
+    }
+
+    @Test
     fun stripsTrailingPadAndIndexesSlots() {
         // Build a synthetic [10,37] one-hot: slots spell "AB1" then pads. Catches stride/alphabet bugs.
         val vocab = OcrDecoder.VOCAB

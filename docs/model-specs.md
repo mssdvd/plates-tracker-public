@@ -70,7 +70,7 @@ three plates that the old model's noisier per-frame reads never accumulated).
 |---|---|
 | Input  | `input` — `uint8 [?, 64, 128, 3]` (NHWC, **dynamic batch**, 128×64 **RGB**, not grayscale) |
 | Output | `plate` — `float32 [?, 10, 37]` (**pre-shaped**, no manual reshape; 10 char slots) |
-| Output | `region` — `float32 [?, 66]` — country classification head; **fetched since 2026-07-09** (`OcrDecoder.decodeRegion`/`REGIONS`, `Ocr.kt`) — argmax label mapped to ISO-2 (`REGION_TO_ISO2`), "Unknown" → `"?"`. Label order is `plate_regions:` in the model's own `cct_s_v2_global_plate_config.yaml`, not alphabetical — verified against a real Italian plate crop (decodes to `"Italy"`). ⚠️ Field-tested 2026-07-09: reliable on full 7-char reads (220/220 IT in all-Italian traffic) but **argmax on truncated crops confidently invents countries** — every one of the 32 foreign labels that drive was a false positive, 29 of them fragments under 7 chars (`device-dumps/2026-07-09_184031/REPORT.md`). Don't honor the head on short reads. |
+| Output | `region` — `float32 [?, 66]` — country classification head; **fetched since 2026-07-09** (`OcrDecoder.decodeRegion`/`REGIONS`, `Ocr.kt`) — argmax label mapped to ISO-2 (`REGION_TO_ISO2`), "Unknown" → `"?"`. Label order is `plate_regions:` in the model's own `cct_s_v2_global_plate_config.yaml`, not alphabetical — verified against a real Italian plate crop (decodes to `"Italy"`). ⚠️ Field-tested 2026-07-09: reliable on full 7-char reads (220/220 IT in all-Italian traffic) but **argmax on truncated crops confidently invents countries** — every one of the 32 foreign labels that drive was a false positive, 29 of them fragments under 7 chars (`device-dumps/2026-07-09_184031/REPORT.md`). **2026-07-10: fixed** — `OcrDecoder.decodeRegion(text, flat)` now returns `"?"` unless the decoded plate text is >=7 chars (`Ocr.read`); a still-open gap is that an exactly-7-char *structurally correct* read can still get a wrong country if the region head itself misfires (2/297 in the field data, see the 🔴 bullet below). |
 | Config | `cct_s_v2_global_plate_config.yaml` (alphabet unchanged: `0-9A-Z_`, 37 classes) |
 
 - ✅ `uint8` input — already quantization-friendly; pairs well with INT8.
@@ -116,9 +116,18 @@ three plates that the old model's noisier per-frame reads never accumulated).
   confident wrong countries**
   — all 32 foreign-labeled rows in the drive were false positives, 29/32 under 7 chars. Neither
   mode is garble in the A/B's sense: the characters read are *correct*, there are just too few of
-  them, so per-read confidence can never catch this. Cheapest fixes measured against this data: a
-  ≥7 min-length gate removes 74/80 junk rows; requiring a `PlateValidator` exact match on the
-  instant path only removes all 80.
+  them, so per-read confidence can never catch this.
+  **2026-07-10: implemented and re-measured** (plate strings withheld — see the repo's redaction
+  policy). Re-classifying the 297 rows with the full validator (not a bare format regex) puts real
+  junk at 85/297, not the report's manually-counted 80 — 5 more are IT-shaped 7-char fragments
+  whose series isn't plausible yet, which `PlateValidator`'s issue-date prior catches and a
+  format-only check doesn't. A ≥7 min-length gate (`DedupEngine.minReadLength`, applied before a
+  read can seed or join a cluster) removes 75/85 on its own; requiring a `PlateValidator` exact
+  match on the `instant` path only (`steady`/`fast` unchanged) removes 82/85 on its own; together,
+  83/85 — the 2 residual rows are genuine 7-char Italian reads the region head mislabeled as
+  foreign, a real but separate country-tagging gap the region-head length gate below narrows but
+  doesn't fully close at exactly 7 chars. See `docs/android-app.md` component 5 for the
+  accompanying dedup-clustering hardening (fragment merge, best-match, promoted-cluster expiry).
   **The `unconfirmed_reads` table (added 2026-07-06 for exactly this uncertainty) was retired the
   same day `instant` shipped** — see `docs/android-app.md` component 7. That trades away the
   earlier hedge (keep the data, decide later) for a direct bet (promote it now); if a false-positive

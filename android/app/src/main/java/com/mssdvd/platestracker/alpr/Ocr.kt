@@ -17,7 +17,8 @@ import java.nio.ByteBuffer
  * Preprocess: clamp+crop the detection box, BGR2RGB (Bitmap pixels already are RGB once the alpha
  * byte is dropped), resize to 128x64 (plain, not letterboxed).
  * Decode: argmax per slot over the alphabet, strip trailing pad, confidence = mean of per-slot max;
- * country = argmax over the region head ([OcrDecoder.decodeRegion]).
+ * country = argmax over the region head, distrusted below [OcrDecoder.MIN_TRUSTED_REGION_LENGTH]
+ * chars of decoded text ([OcrDecoder.decodeRegion]).
  */
 class Ocr(private val env: OrtEnvironment, modelBytes: ByteArray) {
 
@@ -58,8 +59,8 @@ class Ocr(private val env: OrtEnvironment, modelBytes: ByteArray) {
                 for (s in slots.indices) slots[s].copyInto(flat, s * OcrDecoder.VOCAB)
                 @Suppress("UNCHECKED_CAST")
                 val regionFlat = (result.get("region").get().value as Array<FloatArray>)[0] // [66]
-                val country = OcrDecoder.decodeRegion(regionFlat)
-                return OcrDecoder.decode(flat).copy(country = country)
+                val decoded = OcrDecoder.decode(flat)
+                return decoded.copy(country = OcrDecoder.decodeRegion(decoded.text, regionFlat))
             }
         }
     }
