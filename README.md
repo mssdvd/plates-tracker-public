@@ -30,9 +30,6 @@ and a HUD (bottom-right) showing rolling latency + frame rate, the best read, GP
 today's count, and the sync-queue depth. Above: two Italian
 plates read on-device in a single frame at roughly real-time on the phone **CPU** — no cloud, no NPU.
 
-> The phone screenshot (`docs/images/android_app_static.png`) contains **real plates** (personal
-> data): fine inside this private repo, but redact the plates before this file leaves it.
-
 ## How it reads plates
 
 Two open-source ONNX models run in sequence, the same on the workstation spike and on the phone:
