@@ -70,7 +70,7 @@ three plates that the old model's noisier per-frame reads never accumulated).
 |---|---|
 | Input  | `input` — `uint8 [?, 64, 128, 3]` (NHWC, **dynamic batch**, 128×64 **RGB**, not grayscale) |
 | Output | `plate` — `float32 [?, 10, 37]` (**pre-shaped**, no manual reshape; 10 char slots) |
-| Output | `region` — `float32 [?, 66]` — country classification head; **fetched since 2026-07-09** (`OcrDecoder.decodeRegion`/`REGIONS`, `Ocr.kt`) — argmax label mapped to ISO-2 (`REGION_TO_ISO2`), "Unknown" → `"?"`. Label order is `plate_regions:` in the model's own `cct_s_v2_global_plate_config.yaml`, not alphabetical — verified against a real Italian plate crop (decodes to `"Italy"`). ⚠️ Field-tested 2026-07-09: reliable on full 7-char reads (220/220 IT in all-Italian traffic) but **argmax on truncated crops confidently invents countries** — every one of the 32 foreign labels that drive was a false positive, 29 of them fragments under 7 chars (`device-dumps/2026-07-09_184031/REPORT.md`). **2026-07-10: fixed** — `OcrDecoder.decodeRegion(text, flat)` now returns `"?"` unless the decoded plate text is >=7 chars (`Ocr.read`); a still-open gap is that an exactly-7-char *structurally correct* read can still get a wrong country if the region head itself misfires (2/297 in the field data, see the 🔴 bullet below). |
+| Output | `region` — `float32 [?, 66]` — country classification head; **fetched since 2026-07-09** (`OcrDecoder.decodeRegion`/`REGIONS`, `Ocr.kt`) — argmax label mapped to ISO-2 (`REGION_TO_ISO2`), "Unknown" → `"?"`. Label order is `plate_regions:` in the model's own `cct_s_v2_global_plate_config.yaml`, not alphabetical — verified against a real Italian plate crop (decodes to `"Italy"`). ⚠️ Field-tested 2026-07-09: reliable on full 7-char reads (220/220 IT in all-Italian traffic) but **argmax on truncated crops confidently invents countries** — every one of the 32 foreign labels that drive was a false positive, 29 of them fragments under 7 chars (`device-dumps/2026-07-09_184031/REPORT.md`). **2026-07-10: fixed** — `OcrDecoder.decodeRegion(text, flat)` now returns `"?"` unless the decoded plate text is >=7 chars (`Ocr.read`); a still-open gap is that an exactly-7-char *structurally correct* read can still get a wrong country if the region head itself misfires (2/297 in the field data, see the 🔴 bullet below). **2026-07-10 (evening) field check of the fix**: 0 fragment-driven foreign labels in 62 promotions, but the still-open gap fired once — a valid 7-char `it_car`-shaped read labeled `PL` at conf 0.935 (1/62 ≈ 1.6%, consistent with the 2/297 re-measure; one false foreign beep). Candidate fix if it keeps showing up: when `PlateValidator` says EXACT and implies a country, prefer that over a disagreeing region head (`device-dumps/2026-07-10_203742/REPORT.md`). |
 | Config | `cct_s_v2_global_plate_config.yaml` (alphabet unchanged: `0-9A-Z_`, 37 classes) |
 
 - ✅ `uint8` input — already quantization-friendly; pairs well with INT8.
@@ -128,6 +128,13 @@ three plates that the old model's noisier per-frame reads never accumulated).
   foreign, a real but separate country-tagging gap the region-head length gate below narrows but
   doesn't fully close at exactly 7 chars. See `docs/android-app.md` component 5 for the
   accompanying dedup-clustering hardening (fragment merge, best-match, promoted-cluster expiry).
+  **2026-07-10 (evening): field-validated on a real drive** — first drive on the fixed build, 62
+  promotions in 17.5 min of mixed city traffic: **0 junk, 0 empties, 0 duplicates** (vs ~27% junk
+  + duplicates on the same roads the day before), including the stopped/queued 0–5 km/h regime
+  that carried a 43% junk rate pre-fix. The only residual defect was 1 wrong-country row of
+  exactly the predicted at-the-7-char-boundary kind (see the region-head row above). Small sample
+  and precision-only — recall cost of the gates still unmeasured. Full analysis:
+  `device-dumps/2026-07-10_203742/REPORT.md`.
   **The `unconfirmed_reads` table (added 2026-07-06 for exactly this uncertainty) was retired the
   same day `instant` shipped** — see `docs/android-app.md` component 7. That trades away the
   earlier hedge (keep the data, decide later) for a direct bet (promote it now); if a false-positive

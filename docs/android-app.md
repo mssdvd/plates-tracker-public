@@ -145,6 +145,18 @@ docs and `docs/model-specs.md`.
        traffic no longer mint a fresh `id` each time.
      - **Not changed**: the `Log`-stripping theory in the buffered-capture-v2 section below turned
        out to be wrong — see that section's 2026-07-10 update.
+   - **2026-07-10 evening field validation (first real drive on the fixed build,
+     `device-dumps/2026-07-10_203742/REPORT.md`): 62 promotions in 17.5 min, 0 junk, 0 empties,
+     0 duplicates** — against ~27% junk + 11 duplicate rows the day before, including clean reads
+     in the stopped/queued 0–5 km/h regime that was the worst pre-fix (43% junk). Sole residual:
+     one valid 7-char Italian-format read with a wrong (foreign) `country` from the region head —
+     the predicted at-the-boundary gap, a mislabel on a real sighting, not a junk promotion.
+     Caveats: short session, and the drive measures precision only — whether the gates cost recall
+     is still unknown, compounded by the burst path being thermally suspended for the whole session
+     (see the buffered-capture-v2 section). Same dump also produced the first organic cross-day
+     repeat encounters (7 plates recurring across 2–3 days, all within ~60 m of their earlier
+     sighting) — the correlation signal the project exists for, currently only visible via offline
+     SQL against the dump.
 6. **Location** — `FusedLocationProviderClient` supplies lat/lon/speed/accuracy; attach at capture.
 7. **Storage** — plain SQLite (`SightingStore`), not Room. Rows carry a `synced` flag.
    2026-07-09: the `unconfirmed_reads` twin table (2026-07-06 — logged reads that passed
@@ -204,6 +216,19 @@ separate, so-far-unaddressed gap.
   signal that reliably survives a full drive; a promotion-level journal (report recommendation 5's
   alternative) would go further but hasn't been built — flagged, not implemented, since the
   original premise motivating it was wrong.
+  **2026-07-10 evening drive: the thermal fragility escalated from SEVERE-at-session-end to
+  CRITICAL-for-100%-of-the-session** (`last_capture_stats`: `thermal ok=0% severe=0% crit=100%`,
+  battery temp 39.8 → 48.5 °C over 17.5 min, still climbing; July, 18:17 local, dash mount). Ring
+  feed and burst trigger were suspended the entire time (`burstProm=0`, `far=0`,
+  0 `buffered_v2` rows in the DB) and live analysis throttled to ~2 fps — the drive effectively
+  ran v1-with-v2-plumbing. Battery drain rose to ~31%/h (21%/h the day before). The persisted
+  capture stats proved their worth (they were the *only* telemetry that survived — logcat main
+  buffer was back to 256 KiB with ~2.5 min retention, no reboot involved), but they're
+  last-writer-wins: the drive was two capture sessions (a still-unexplained mid-drive restart) and
+  the first session's stats were already overwritten at pull time. Appending per-session stats —
+  or the promotion journal above — is the cheap fix. Thermal mitigation is now the binding
+  constraint on capture quality, ahead of any remaining precision work
+  (`device-dumps/2026-07-10_203742/REPORT.md`).
 
 ### Runtime gotchas to settle during scaffolding (don't guess from memory)
 
