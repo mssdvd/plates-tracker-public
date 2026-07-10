@@ -69,9 +69,21 @@ object OcrDecoder {
     // and moto minimum. Below this length the region head isn't trusted at all.
     const val MIN_TRUSTED_REGION_LENGTH = 7
 
-    /** [decodeRegion], distrusted below [MIN_TRUSTED_REGION_LENGTH] chars of decoded [text]. */
-    fun decodeRegion(text: String, flat: FloatArray): String =
-        if (text.length >= MIN_TRUSTED_REGION_LENGTH) decodeRegion(flat) else "?"
+    /**
+     * [decodeRegion], distrusted below [MIN_TRUSTED_REGION_LENGTH] chars of decoded [text]. At or
+     * above that length, an EXACT structural match (see [PlateValidator]) overrides a disagreeing
+     * region head — 2026-07-10 field data: the head has now misfired on 3 structurally exact reads
+     * and never once been right when structure disagreed, so at exactly 7 chars structure is the
+     * stronger signal (device-dumps/2026-07-10_203742/REPORT.md).
+     */
+    fun decodeRegion(text: String, flat: FloatArray): String {
+        if (text.length < MIN_TRUSTED_REGION_LENGTH) return "?"
+        val structural = PlateValidator.validate(text)
+        if (structural.confidence == PlateValidator.Confidence.EXACT && structural.country != "?") {
+            return structural.country
+        }
+        return decodeRegion(flat)
+    }
 
     /**
      * Decoded OCR output. [charConfidences] is the per-slot max softmax aligned char-for-char with

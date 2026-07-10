@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.LayoutInflater
 import android.view.WindowManager
@@ -169,9 +170,18 @@ class MainActivity : AppCompatActivity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (!s.running && blackout) setBlackout(false)
 
+        // High-visibility banner while burst/ring is suspended (thermal SEVERE+, see
+        // CaptureService.analyzeV2/scanLive) — the small HUD token below was easy to miss while
+        // driving.
+        binding.thermalBanner.isVisible = s.running && s.thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
+        if (binding.thermalBanner.isVisible) {
+            binding.thermalBanner.text = getString(R.string.thermal_banner, thermalName(s.thermalStatus))
+        }
+
         val best = s.reads.maxByOrNull { it.ocrConfidence }
         binding.hud.text = buildString {
             if (s.running) {
+                if (s.hotStart) append("⚠ started hot — cool the phone\n")
                 append("latency ${s.latencyMs} ms  (~${if (s.latencyMs > 0) 1000 / s.latencyMs else 0} fps)\n")
                 append("plate ${best?.let { "${it.text} ${"%.2f".format(it.ocrConfidence)} ${it.country}" } ?: "—"}\n")
                 append("gps ${if (s.hasGps) "✓" else "✗"}")

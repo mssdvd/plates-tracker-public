@@ -68,6 +68,31 @@ class OcrDecoderTest {
     }
 
     @Test
+    fun decodeRegionOverridesWithStructuralCountryOnExactMatch() {
+        // Region vector argmaxes to "IT" (per decodesRegionVectorToSameCountry), but a text that
+        // structurally EXACT-matches a different format (fr_car) should win — the 2026-07-10 field
+        // gap (device-dumps/2026-07-10_203742/REPORT.md): the head misfires on exact 7-char reads.
+        val lines = javaClass.getResourceAsStream("/region_vector.txt")!!
+            .bufferedReader().readLines()
+        val vec = lines[1].trim().split(" ").map { it.toFloat() }.toFloatArray()
+
+        // "Q" is FR-only (not in the Italian alphabet), so this can only EXACT-match fr_car, not
+        // the higher-priority it_car — an unambiguous override case.
+        assertEquals("FR", OcrDecoder.decodeRegion("AQ123CD", vec))
+    }
+
+    @Test
+    fun decodeRegionKeepsHeadWhenStructureDoesNotContradict() {
+        // A structurally INVALID 7-char string has no format to override with — the raw region
+        // head argmax ("IT", per the fixture) still applies.
+        val lines = javaClass.getResourceAsStream("/region_vector.txt")!!
+            .bufferedReader().readLines()
+        val vec = lines[1].trim().split(" ").map { it.toFloat() }.toFloatArray()
+
+        assertEquals("IT", OcrDecoder.decodeRegion("ZZZZZZZ", vec))
+    }
+
+    @Test
     fun stripsTrailingPadAndIndexesSlots() {
         // Build a synthetic [10,37] one-hot: slots spell "AB1" then pads. Catches stride/alphabet bugs.
         val vocab = OcrDecoder.VOCAB

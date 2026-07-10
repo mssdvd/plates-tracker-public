@@ -1,5 +1,6 @@
 package com.mssdvd.platestracker.capture
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -101,6 +102,7 @@ class CaptureService : LifecycleService() {
         val syncStatus: String = "", // last SyncWorker outcome, e.g. "ok 12:04 (+6)"
         val burstPending: Int = 0, // capture v2: ring windows queued for burst re-scan
         val captureStats: String = "", // this session's v1/v2 + thermal summary, see buildCaptureStats()
+        val hotStart: Boolean = false, // battery/thermal already elevated when this session started
     )
 
     inner class LocalBinder : Binder() {
@@ -158,11 +160,35 @@ class CaptureService : LifecycleService() {
     private var livePromotions = 0
     private val thermalBucketMs = LongArray(3) // [ok, severe, critical+] — see thermalBucket()
     private var lastStatsSave = 0L
+    private var sessionId = ""
+    private var sessionStartIso = ""
+
+    // The exit reason for the *previous* process instance, read once at process start (an
+    // ApplicationExitInfo is per-process history, not per-session) — see journalEntry() and item 4
+    // of the 2026-07-10 fix plan. Null before API 30 or if there's no history yet.
+    private var lastExitInfo: String? = null
 
     override fun onCreate() {
         super.onCreate()
         location = LocationProvider(this)
         store = SightingStore.get(this)
+        lastExitInfo = readLastExitReason()
+    }
+
+    /**
+     * The most recent reason this app's process last exited, e.g. after a thermal/low-memory kill
+     * that would otherwise be invisible (the 2026-07-10 drive had an unexplained ~90s mid-drive
+     * gap — see item 4 of the fix plan). Folded into the next session's journal entry so a future
+     * restart is self-explaining without a separate adb pull.
+     */
+    private fun readLastExitReason(): String? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        return runCatching {
+            val am = getSystemService(ActivityManager::class.java) ?: return null
+            val info = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull() ?: return null
+            val at = Instant.ofEpochMilli(info.timestamp).toString()
+            "reason=${info.reason} desc=${info.description} at=$at"
+        }.getOrNull()
     }
 
     override fun onBind(intent: Intent): IBinder {
@@ -194,6 +220,19 @@ class CaptureService : LifecycleService() {
             getSystemService(PowerManager::class.java)
                 ?.addThermalStatusListener(ContextCompat.getMainExecutor(this), listener)
         }
+        // Hot-start check: the 2026-07-10 evening drive started at 39.8°C battery — already
+        // pre-throttled territory — with no on-screen indication. currentThermalStatus (not the
+        // listener above, which only fires once posted to the main queue after this method
+        // returns) and a direct sticky-broadcast temperature read are both synchronous, so this
+        // can gate right at session start.
+        readTemperature()
+        val startThermal =
+            if (Build.VERSION.SDK_INT >= 29) getSystemService(PowerManager::class.java)?.currentThermalStatus ?: 0
+            else 0
+        val hotStart = (_state.value.battTempC ?: 0f) >= HOT_START_BATT_C ||
+            startThermal >= PowerManager.THERMAL_STATUS_MODERATE
+        if (hotStart) tone?.startTone(ToneGenerator.TONE_PROP_NACK, 300)
+        _state.value = _state.value.copy(hotStart = hotStart)
         captureV2 = runBlocking { AppSettings.read(this@CaptureService).captureV2 }
         warnedRotation = false
         framesV1 = 0L
@@ -203,6 +242,8 @@ class CaptureService : LifecycleService() {
         livePromotions = 0
         thermalBucketMs.fill(0L)
         lastStatsSave = 0L
+        sessionId = SystemClock.elapsedRealtime().toString(36)
+        sessionStartIso = Instant.now().toString()
         if (captureV2) {
             val r = AuRing(RING_BYTES)
             ring = r
@@ -413,7 +454,8 @@ class CaptureService : LifecycleService() {
         if (now - lastStatsSave > STATS_SAVE_INTERVAL_MS) {
             lastStatsSave = now
             val ctx = applicationContext
-            runBlocking { AppSettings.saveCaptureStats(ctx, stats) }
+            val entry = journalEntry(stats, stopReason = null)
+            runBlocking { AppSettings.saveCaptureStats(ctx, sessionId, entry) }
         }
         _state.value = _state.value.copy(
             reads = reads,
@@ -470,6 +512,22 @@ class CaptureService : LifecycleService() {
             "burstProm=$burstPromotions liveProm=$livePromotions\n" +
             "thermal ok=${pct(thermalBucketMs[0])}% severe=${pct(thermalBucketMs[1])}% " +
             "crit=${pct(thermalBucketMs[2])}%"
+    }
+
+    /**
+     * Wraps [buildCaptureStats]'s body into one journal entry: a header (session id, start time,
+     * and — only relevant on the first entry of a fresh process — the previous process's exit
+     * reason, see [readLastExitReason]), then the stats, then a [stopReason] line only present on
+     * the final save. An entry with no stop reason means the process never got to write one — i.e.
+     * it was killed, not stopped — which is the cheap "was this a clean stop" signal item 4 needed.
+     */
+    private fun journalEntry(stats: String, stopReason: String?): String {
+        val header = buildString {
+            append(sessionId).append(' ').append(sessionStartIso)
+            lastExitInfo?.let { append(" prevExit[").append(it).append(']') }
+        }
+        val stop = stopReason?.let { "\nstop=$it" } ?: ""
+        return "$header\n$stats$stop"
     }
 
     @Synchronized // scan thread in both paths, plus the burst thread in v2
@@ -573,8 +631,14 @@ class CaptureService : LifecycleService() {
 
     private fun onThermalStatus(status: Int) {
         if (status == thermalStatus) return
+        // One-shot alert on newly entering SEVERE+: this is where burst/ring suspend (see
+        // analyzeV2/scanLive), and the driver otherwise has no cue that half the pipeline just
+        // went quiet — see MainActivity's high-visibility banner for the visual half of this.
+        val enteringSevere = status >= PowerManager.THERMAL_STATUS_SEVERE &&
+            thermalStatus < PowerManager.THERMAL_STATUS_SEVERE
         thermalStatus = status
         _state.value = _state.value.copy(thermalStatus = status)
+        if (enteringSevere) tone?.startTone(ToneGenerator.TONE_PROP_PROMPT, 400)
         AppLog.i(TAG, "thermal status -> $status, analysis interval ${analysisIntervalMs()} ms")
     }
 
@@ -636,7 +700,10 @@ class CaptureService : LifecycleService() {
         isRunning.value = false
         // Final save regardless of the periodic interval, so a manual stop never loses this
         // session's v1/v2 + thermal summary — the whole point is it survives after the drive.
-        runBlocking { AppSettings.saveCaptureStats(applicationContext, buildCaptureStats()) }
+        // Stamped "clean-stop": this only runs from ACTION_STOP or onDestroy(), so a journal entry
+        // missing it means the process was killed before either could run (see readLastExitReason).
+        val entry = journalEntry(buildCaptureStats(), stopReason = "clean-stop")
+        runBlocking { AppSettings.saveCaptureStats(applicationContext, sessionId, entry) }
         exposure?.reset() // drop any MANUAL override before the camera unbinds
         exposure = null
         cameraProvider?.unbindAll()
@@ -683,6 +750,9 @@ class CaptureService : LifecycleService() {
         private const val CHANNEL_ID = "capture"
         private const val NOTIFICATION_ID = 1
         private const val TONE_VOLUME = 80 // 0..100
+        // Hot-start gate: the 2026-07-10 drive started at 39.8°C battery, already in throttled
+        // territory. See onStartCommand()'s hot-start check.
+        private const val HOT_START_BATT_C = 38f
         private const val TARGET_FPS = 8
         private const val MIN_INTERVAL_MS = 1000L / TARGET_FPS
         private const val SOURCE_DEVICE = "android-phone"

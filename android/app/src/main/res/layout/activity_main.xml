@@ -14,6 +14,21 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- High-visibility warning while burst/ring is suspended (thermal SEVERE+) — the small HUD
+         token was easy to miss while driving. -->
+    <TextView
+        android:id="@+id/thermalBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:padding="10dp"
+        android:background="#CCB00020"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:visibility="gone" />
+
     <!-- Freshly promoted plate, flashed large for a few seconds (glanceable while driving). -->
     <LinearLayout
         android:id="@+id/flashGroup"

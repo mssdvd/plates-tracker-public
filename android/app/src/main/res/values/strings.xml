@@ -12,6 +12,7 @@
     <string name="dim">Dim</string>
     <string name="history">History</string>
     <string name="banner_not_configured">Server not configured — tap to set up sync</string>
+    <string name="thermal_banner">HOT (%1$s) — burst/ring OFF</string>
     <string name="test_connection">Test connection</string>
     <string name="testing">Testing…</string>
     <string name="test_no_url">Enter a server URL first</string>
