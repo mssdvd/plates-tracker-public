@@ -578,12 +578,8 @@ class CaptureService : LifecycleService() {
         Log.i(TAG, "thermal status -> $status, analysis interval ${analysisIntervalMs()} ms")
     }
 
-    /** Back processing off as the OS heats up — capture keeps running, just at fewer fps. */
-    private fun analysisIntervalMs(): Long = when {
-        thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE -> MIN_INTERVAL_MS * 4 // 2 fps
-        thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE -> MIN_INTERVAL_MS * 2 // 4 fps
-        else -> MIN_INTERVAL_MS
-    }
+    /** Thermal fps throttling disabled 2026-07-10 as an experiment — see memory note. */
+    private fun analysisIntervalMs(): Long = MIN_INTERVAL_MS
 
     /** Refresh queue/today counts + last sync outcome (the activity polls this). */
     fun refreshCounts() {
