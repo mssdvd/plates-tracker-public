@@ -3,7 +3,7 @@ package com.mssdvd.platestracker.capture
 import android.graphics.Rect
 import android.media.Image
 import android.os.SystemClock
-import android.util.Log
+import com.mssdvd.platestracker.AppLog
 import com.mssdvd.platestracker.alpr.Alpr
 import com.mssdvd.platestracker.alpr.Detector
 import com.mssdvd.platestracker.alpr.PlateBox
@@ -46,7 +46,7 @@ class BurstProcessor(
                 try {
                     runNext()
                 } catch (t: Throwable) {
-                    Log.e(TAG, "burst failed", t)
+                    AppLog.e(TAG, "burst failed", t)
                 }
             }
         }
@@ -90,7 +90,7 @@ class BurstProcessor(
                 scanFrame(engine, image, ptsUs)
             }
         }
-        Log.i(TAG, "burst: ${aus.size} AUs -> $frames frames in ${SystemClock.elapsedRealtime() - t0} ms")
+        AppLog.i(TAG, "burst: ${aus.size} AUs -> $frames frames in ${SystemClock.elapsedRealtime() - t0} ms")
     }
 
     private fun scanFrame(engine: Alpr, image: Image, ptsUs: Long) {

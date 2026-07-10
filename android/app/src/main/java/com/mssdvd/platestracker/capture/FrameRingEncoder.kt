@@ -4,8 +4,8 @@ import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.util.Log
 import androidx.camera.core.ImageProxy
+import com.mssdvd.platestracker.AppLog
 
 /**
  * Hardware video encoder feeding the RAM [AuRing] (capture v2). [feed] is called on a ~15fps clock
@@ -56,7 +56,7 @@ class FrameRingEncoder(private val ring: AuRing) {
             } // else: encoder busy — drop the frame, the ring tolerates gaps
             drain(c)
         } catch (t: Throwable) {
-            Log.e(TAG, "encoder failed — ring disabled for this run", t)
+            AppLog.e(TAG, "encoder failed — ring disabled for this run", t)
             failed = true
             release()
         }
@@ -89,10 +89,10 @@ class FrameRingEncoder(private val ring: AuRing) {
                 c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 c.start()
                 codec = c
-                Log.i(TAG, "ring encoder $mime ${width}x$height @ ${BIT_RATE / 1_000_000} Mbps")
+                AppLog.i(TAG, "ring encoder $mime ${width}x$height @ ${BIT_RATE / 1_000_000} Mbps")
                 return c
             } catch (t: Throwable) {
-                Log.w(TAG, "encoder $mime unavailable at ${width}x$height", t)
+                AppLog.w(TAG, "encoder $mime unavailable at ${width}x$height", t)
             }
         }
         failed = true

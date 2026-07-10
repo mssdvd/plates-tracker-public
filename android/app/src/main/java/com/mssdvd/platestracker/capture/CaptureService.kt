@@ -24,7 +24,6 @@ import android.graphics.Rect
 import android.os.Binder
 import android.os.IBinder
 import android.os.SystemClock
-import android.util.Log
 import android.util.Size
 import android.view.Display
 import androidx.annotation.OptIn as AndroidXOptIn
@@ -41,6 +40,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import com.mssdvd.platestracker.AppLog
 import com.mssdvd.platestracker.MainActivity
 import com.mssdvd.platestracker.R
 import com.mssdvd.platestracker.alpr.Alpr
@@ -219,7 +219,7 @@ class CaptureService : LifecycleService() {
         if (alpr == null) analysisExecutor.execute {
             val t0 = SystemClock.elapsedRealtime()
             alpr = Alpr(applicationContext)
-            Log.i(TAG, "ALPR ready in ${SystemClock.elapsedRealtime() - t0} ms")
+            AppLog.i(TAG, "ALPR ready in ${SystemClock.elapsedRealtime() - t0} ms")
         }
         startCamera()
         SyncWorker.enqueue(this, wifiOnly())
@@ -307,7 +307,7 @@ class CaptureService : LifecycleService() {
             }
             if (captureV2 && !warnedRotation) {
                 warnedRotation = true
-                Log.w(
+                AppLog.w(
                     TAG,
                     "rotation ${proxy.imageInfo.rotationDegrees}° — the ring stores frames as " +
                         "delivered, so buffered capture is off; falling back to live-only scan"
@@ -316,7 +316,7 @@ class CaptureService : LifecycleService() {
             framesV1++
             analyzeV1(proxy)
         } catch (t: Throwable) {
-            Log.e(TAG, "analyze failed", t)
+            AppLog.e(TAG, "analyze failed", t)
         } finally {
             proxy.close()
         }
@@ -362,7 +362,7 @@ class CaptureService : LifecycleService() {
             try {
                 scanLive(engine, upright, now, ptsUs)
             } catch (t: Throwable) {
-                Log.e(TAG, "scan failed", t)
+                AppLog.e(TAG, "scan failed", t)
             } finally {
                 scanBusy.set(false)
             }
@@ -481,7 +481,7 @@ class CaptureService : LifecycleService() {
         if (fix == null) {
             // The server requires lat/lon; a sighting at a made-up location is worse than none.
             droppedNoGps++
-            Log.w(TAG, "dropping ${p.plateText}: no fresh GPS fix")
+            AppLog.w(TAG, "dropping ${p.plateText}: no fresh GPS fix")
             return
         }
         store.insert(
@@ -524,7 +524,7 @@ class CaptureService : LifecycleService() {
         )
         notify(today)
         SyncWorker.enqueue(this, wifiOnly())
-        Log.i(TAG, "recorded ${p.plateText} (${p.readKind}, ${p.frames} frames)")
+        AppLog.i(TAG, "recorded ${p.plateText} (${p.readKind}, ${p.frames} frames)")
     }
 
     /**
@@ -575,7 +575,7 @@ class CaptureService : LifecycleService() {
         if (status == thermalStatus) return
         thermalStatus = status
         _state.value = _state.value.copy(thermalStatus = status)
-        Log.i(TAG, "thermal status -> $status, analysis interval ${analysisIntervalMs()} ms")
+        AppLog.i(TAG, "thermal status -> $status, analysis interval ${analysisIntervalMs()} ms")
     }
 
     /** Thermal fps throttling disabled 2026-07-10 as an experiment — see memory note. */

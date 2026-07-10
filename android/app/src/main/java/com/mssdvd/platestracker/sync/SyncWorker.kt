@@ -1,7 +1,6 @@
 package com.mssdvd.platestracker.sync
 
 import android.content.Context
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -10,6 +9,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.mssdvd.platestracker.AppLog
 import com.mssdvd.platestracker.data.Sighting
 import com.mssdvd.platestracker.data.SightingStore
 import com.mssdvd.platestracker.settings.AppSettings
@@ -33,7 +33,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val cfg = AppSettings.read(applicationContext)
         if (!cfg.isComplete) {
-            Log.i(TAG, "server not configured; leaving queue as-is")
+            AppLog.i(TAG, "server not configured; leaving queue as-is")
             AppSettings.saveSyncStatus(applicationContext, "server not configured")
             return Result.success()
         }
@@ -88,7 +88,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 status == 401 || status == 400 -> {
                     // Retrying won't fix a bad token or a rejected payload; keep rows queued and
                     // surface it (the HUD shows the unsynced count not going down).
-                    Log.w(TAG, "upload to $url rejected with HTTP $status; check server URL/token")
+                    AppLog.w(TAG, "upload to $url rejected with HTTP $status; check server URL/token")
                     val msg = "rejected HTTP $status at ${clock()} — check URL/token"
                     return DrainOutcome.Stopped(Result.failure(), uploaded, msg)
                 }
@@ -116,7 +116,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             conn.disconnect()
         }
     } catch (e: Exception) {
-        Log.w(TAG, "upload failed: $e")
+        AppLog.w(TAG, "upload failed: $e")
         -1
     }
 

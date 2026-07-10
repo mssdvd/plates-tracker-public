@@ -1,11 +1,11 @@
 package com.mssdvd.platestracker.capture
 
 import android.hardware.camera2.CaptureRequest
-import android.util.Log
 import androidx.annotation.OptIn as AndroidXOptIn
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import com.mssdvd.platestracker.AppLog
 
 /**
  * Shutter-priority exposure cap for oncoming-plate capture. CameraX's default auto-exposure
@@ -49,7 +49,7 @@ class ExposureController(private val control: Camera2CameraControl) {
         mode = Mode.MANUAL
         overCapFrames = 0
         apply()
-        Log.i(TAG, "AE ${exposureNs / 1000}us > cap -> MANUAL, iso=$iso")
+        AppLog.i(TAG, "AE ${exposureNs / 1000}us > cap -> MANUAL, iso=$iso")
     }
 
     /**
@@ -64,7 +64,7 @@ class ExposureController(private val control: Camera2CameraControl) {
             luma > LUMA_HIGH && iso <= ISO_MIN -> {
                 mode = Mode.AUTO
                 clear()
-                Log.i(TAG, "scene bright at iso floor -> AUTO")
+                AppLog.i(TAG, "scene bright at iso floor -> AUTO")
             }
             luma > LUMA_HIGH -> adjustIso(DOWN)
             luma < LUMA_LOW -> adjustIso(UP)

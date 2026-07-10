@@ -4,7 +4,7 @@ import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.SystemClock
-import android.util.Log
+import com.mssdvd.platestracker.AppLog
 
 /**
  * One-shot synchronous decode of a ring snapshot (capture v2). Configured straight from the
@@ -55,7 +55,7 @@ object BurstDecoder {
                 codec.releaseOutputBuffer(outIndex, false)
                 if (eos) return
             }
-            Log.w(TAG, "decode timed out after $TIMEOUT_MS ms (${aus.size} AUs, fed $fed)")
+            AppLog.w(TAG, "decode timed out after $TIMEOUT_MS ms (${aus.size} AUs, fed $fed)")
         } finally {
             runCatching { codec.stop() }
             codec.release()
